@@ -243,9 +243,10 @@ internal object FileUtils {
 
     /**
      * @param contentResolver - content resolver
-     * @param path            - path to temp file that needs to be stored
+     * @param inputPath       - path to temp file that needs to be stored
      * @param folderName      - folder name for storing video
      * @param toDcim          - whether the file should be saved to DCIM
+     * @param fileName        - optional target file name (with or without extension)
      * @return true if video was saved successfully
      */
     fun insertVideo(
@@ -253,14 +254,23 @@ internal object FileUtils {
         inputPath: String,
         folderName: String?,
         toDcim: Boolean,
+        fileName: String? = null,
         bufferSize: Int = BUFFER_SIZE
     ): Boolean {
         val inputFile = File(inputPath)
+        val inputExtension = MimeTypeMap.getFileExtensionFromUrl(inputFile.toString())
+        val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(inputExtension)
+
+        // Resolve final display/target name
+        var targetName = if (!fileName.isNullOrBlank()) fileName else inputFile.name
+        if (!targetName.contains('.')) {
+            if (!inputExtension.isNullOrEmpty()) {
+                targetName = "$targetName.$inputExtension"
+            }
+        }
+
         val inputStream: InputStream?
         val outputStream: OutputStream?
-
-        val extension = MimeTypeMap.getFileExtensionFromUrl(inputFile.toString())
-        val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
 
         var directory = Environment.DIRECTORY_MOVIES
         if (toDcim) {
@@ -268,11 +278,11 @@ internal object FileUtils {
         }
 
         val albumDir = File(getAlbumFolderPath(folderName, MediaType.video, toDcim))
-        val videoFilePath = File(albumDir, inputFile.name).absolutePath
+        val videoFilePath = File(albumDir, targetName).absolutePath
 
         val values = ContentValues()
-        values.put(MediaStore.Video.Media.TITLE, inputFile.name)
-        values.put(MediaStore.Video.Media.DISPLAY_NAME, inputFile.name)
+        values.put(MediaStore.Video.Media.TITLE, targetName)
+        values.put(MediaStore.Video.Media.DISPLAY_NAME, targetName)
         values.put(MediaStore.Video.Media.MIME_TYPE, mimeType)
         values.put(MediaStore.Video.Media.DATE_ADDED, System.currentTimeMillis())
         values.put(MediaStore.Video.Media.DATE_MODIFIED, System.currentTimeMillis())

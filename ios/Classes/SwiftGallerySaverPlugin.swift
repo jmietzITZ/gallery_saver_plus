@@ -10,6 +10,7 @@ enum MediaType: Int {
 public class SwiftGallerySaverPlugin: NSObject, FlutterPlugin {
     let path = "path"
     let albumName = "albumName"
+    let fileName = "fileName"
     
     public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(name: "gallery_saver", binaryMessenger: registrar.messenger())
@@ -40,38 +41,39 @@ public class SwiftGallerySaverPlugin: NSObject, FlutterPlugin {
         let args = call.arguments as? Dictionary<String, Any>
         let path = args![self.path] as! String
         let albumName = args![self.albumName] as? String
+        let customFileName = args?[self.fileName] as? String
         
         let status = PHPhotoLibrary.authorizationStatus()
         if status == .notDetermined {
             PHPhotoLibrary.requestAuthorization({status in
                 if status == .authorized{
-                    self._saveMediaToAlbum(path, mediaType, albumName, result)
+                    self._saveMediaToAlbum(path, mediaType, albumName, customFileName, result)
                 } else {
                     result(false);
                 }
             })
         } else if status == .authorized {
-            self._saveMediaToAlbum(path, mediaType, albumName, result)
+            self._saveMediaToAlbum(path, mediaType, albumName, customFileName, result)
         } else {
             result(false);
         }
     }
     
     private func _saveMediaToAlbum(_ imagePath: String, _ mediaType: MediaType, _ albumName: String?,
-                                   _ flutterResult: @escaping FlutterResult) {
-        if(albumName == nil){
-           self.saveFile(imagePath, mediaType, nil, flutterResult)
+                                   _ fileName: String?, _ flutterResult: @escaping FlutterResult) {
+        if (albumName == nil) {
+            self.saveFile(imagePath, mediaType, nil, fileName, flutterResult)
         } else if let album = fetchAssetCollectionForAlbum(albumName!) {
-             self.saveFile(imagePath, mediaType, album, flutterResult)
+            self.saveFile(imagePath, mediaType, album, fileName, flutterResult)
         } else {
             // create photos album
             createAppPhotosAlbum(albumName: albumName!) { (error) in
                 guard error == nil else {
                     flutterResult(false)
                     return
-                    }
-                if let album = self.fetchAssetCollectionForAlbum(albumName!){
-                    self.saveFile(imagePath, mediaType, album, flutterResult)
+                }
+                if let album = self.fetchAssetCollectionForAlbum(albumName!) {
+                    self.saveFile(imagePath, mediaType, album, fileName, flutterResult)
                 } else {
                     flutterResult(false)
                 }
@@ -80,17 +82,33 @@ public class SwiftGallerySaverPlugin: NSObject, FlutterPlugin {
     }
     
     private func saveFile(_ filePath: String, _ mediaType: MediaType, _ album: PHAssetCollection?,
-                          _ flutterResult: @escaping FlutterResult) {
+                          _ fileName: String?, _ flutterResult: @escaping FlutterResult) {
         let url = URL(fileURLWithPath: filePath)
         PHPhotoLibrary.shared().performChanges({
-            let assetCreationRequest = mediaType == .image ?
-                PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url)
-                : PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url);
-            if (album != nil) {
-                guard let assetCollectionChangeRequest = PHAssetCollectionChangeRequest(for: album!),
-                    let createdAssetPlaceholder = assetCreationRequest?.placeholderForCreatedAsset else {
-                            return
+            var placeholder: PHObjectPlaceholder?
+            
+            switch mediaType {
+            case .image:
+                if let changeRequest = PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url) {
+                    placeholder = changeRequest.placeholderForCreatedAsset
+                }
+            case .video:
+                if let name = fileName, !name.isEmpty {
+                    let creationRequest = PHAssetCreationRequest.forAsset()
+                    let options = PHAssetResourceCreationOptions()
+                    options.originalFilename = name
+                    creationRequest.addResource(with: .video, fileURL: url, options: options)
+                    placeholder = creationRequest.placeholderForCreatedAsset
+                } else {
+                    if let changeRequest = PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url) {
+                        placeholder = changeRequest.placeholderForCreatedAsset
                     }
+                }
+            }
+            
+            if let album = album,
+               let assetCollectionChangeRequest = PHAssetCollectionChangeRequest(for: album),
+               let createdAssetPlaceholder = placeholder {
                 assetCollectionChangeRequest.addAssets(NSArray(array: [createdAssetPlaceholder]))
             }
         }) { (success, error) in
@@ -123,4 +141,3 @@ public class SwiftGallerySaverPlugin: NSObject, FlutterPlugin {
         }
     }
 }
-

@@ -17,12 +17,14 @@ class GallerySaver {
   static const String fileIsNotImage = 'File on path is not an image.';
   static const MethodChannel _channel = const MethodChannel(channelName);
 
-  ///saves video from provided temp path and optional album name in gallery
+  /// saves video from provided path/URL and optional album name in gallery.
+  /// [fileName] allows specifying the final filename of the saved video.
   static Future<bool?> saveVideo(
     String path, {
     String? albumName,
     bool toDcim = false,
     Map<String, String>? headers,
+    String? fileName,
   }) async {
     File? tempFile;
     if (path.isEmpty) {
@@ -37,7 +39,12 @@ class GallerySaver {
     }
     bool? result = await _channel.invokeMethod(
       methodSaveVideo,
-      <String, dynamic>{'path': path, 'albumName': albumName, 'toDcim': toDcim},
+      <String, dynamic>{
+        'path': path,
+        'albumName': albumName,
+        'toDcim': toDcim,
+        'fileName': fileName,
+      },
     );
     if (tempFile != null) {
       tempFile.delete();
@@ -45,7 +52,7 @@ class GallerySaver {
     return result;
   }
 
-  ///saves image from provided temp path and optional album name in gallery
+  /// saves image from provided temp path and optional album name in gallery
   static Future<bool?> saveImage(
     String path, {
     String? albumName,
