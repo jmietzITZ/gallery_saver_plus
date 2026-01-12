@@ -14,6 +14,8 @@ import android.webkit.MimeTypeMap
 import androidx.exifinterface.media.ExifInterface
 import java.io.*
 import android.media.MediaMetadataRetriever
+import java.text.SimpleDateFormat
+import java.util.*
 
 /**
  * Core implementation of methods related to File manipulation
@@ -35,29 +37,45 @@ internal object FileUtils {
      * @param path            - path to temp file that needs to be stored
      * @param folderName      - folder name for storing image
      * @param toDcim          - whether the file should be saved to DCIM
+     * @param createdAt       - optional timestamp in millis to set (EXIF + MediaStore DATE_TAKEN)
      * @return true if image was saved successfully
      */
     fun insertImage(
         contentResolver: ContentResolver,
         path: String,
         folderName: String?,
-        toDcim: Boolean
+        toDcim: Boolean,
+        createdAt: Long? = null
     ): Boolean {
         val file = File(path)
         val extension = MimeTypeMap.getFileExtensionFromUrl(file.toString())
         val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
-        var source = getBytesFromFile(file)
 
         var directory = Environment.DIRECTORY_PICTURES
         if (toDcim) {
             directory = Environment.DIRECTORY_DCIM
         }
 
-        val rotatedBytes = getRotatedBytesIfNecessary(source, path)
-
+        // Prepare bytes (rotate if necessary)
+        var sourceBytes = getBytesFromFile(file)
+        val rotatedBytes = getRotatedBytesIfNecessary(sourceBytes, path)
         if (rotatedBytes != null) {
-            source = rotatedBytes
+            sourceBytes = rotatedBytes
         }
+
+        // If createdAt provided, attempt to embed EXIF date into the bytes by writing to a temp file first
+        if (createdAt != null && sourceBytes != null) {
+            try {
+                val temp = File.createTempFile("gs_img_", ".$extension")
+                FileOutputStream(temp).use { it.write(sourceBytes) }
+                applyExifDate(temp.absolutePath, createdAt)
+                sourceBytes = getBytesFromFile(temp)
+                temp.delete()
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to apply EXIF date: ${e.message}")
+            }
+        }
+
         val albumDir = File(getAlbumFolderPath(folderName, MediaType.image, toDcim))
         val imageFilePath = File(albumDir, file.name).absolutePath
 
@@ -67,13 +85,20 @@ internal object FileUtils {
         values.put(MediaStore.Images.Media.DATE_ADDED, System.currentTimeMillis() / 1000)
         values.put(MediaStore.Images.Media.DATE_MODIFIED, System.currentTimeMillis() / 1000)
         values.put(MediaStore.Images.Media.DISPLAY_NAME, file.name)
-        values.put(MediaStore.Images.Media.SIZE, file.length())
+        if (sourceBytes != null) {
+            values.put(MediaStore.Images.Media.SIZE, sourceBytes.size.toLong())
+        }
+
+        // Always set DATE_TAKEN if provided
+        if (createdAt != null) {
+            values.put(MediaStore.Images.Media.DATE_TAKEN, createdAt)
+        } else if (android.os.Build.VERSION.SDK_INT >= 29) {
+            values.put(MediaStore.Images.Media.DATE_TAKEN, System.currentTimeMillis())
+        }
 
         if (android.os.Build.VERSION.SDK_INT < 29) {
             values.put(MediaStore.Images.ImageColumns.DATA, imageFilePath)
-        }
-        else {
-            values.put(MediaStore.Images.Media.DATE_TAKEN, System.currentTimeMillis())
+        } else {
             values.put(MediaStore.Images.Media.RELATIVE_PATH, directory + File.separator + folderName)
         }
 
@@ -82,20 +107,20 @@ internal object FileUtils {
         try {
             imageUri = contentResolver.insert(imageUri, values)
 
-            if (source != null) {
+            if (sourceBytes != null) {
                 var outputStream: OutputStream? = null
                 if (imageUri != null) {
                     outputStream = contentResolver.openOutputStream(imageUri)
                 }
 
                 outputStream?.use {
-                    outputStream.write(source)
+                    outputStream.write(sourceBytes)
                 }
 
                 if (imageUri != null && android.os.Build.VERSION.SDK_INT < 29) {
                     val pathId = ContentUris.parseId(imageUri)
                     val miniThumb = MediaStore.Images.Thumbnails.getThumbnail(
-                            contentResolver, pathId, MediaStore.Images.Thumbnails.MINI_KIND, null)
+                        contentResolver, pathId, MediaStore.Images.Thumbnails.MINI_KIND, null)
                     storeThumbnail(contentResolver, miniThumb, pathId)
                 }
             } else {
@@ -105,7 +130,9 @@ internal object FileUtils {
                 imageUri = null
             }
         } catch (e: IOException) {
-            contentResolver.delete(imageUri!!, null, null)
+            if (imageUri != null) {
+                contentResolver.delete(imageUri, null, null)
+            }
             return false
         } catch (t: Throwable) {
             return false
@@ -119,6 +146,22 @@ internal object FileUtils {
      * @param path   - path to image that needs to be checked for rotation
      * @return - array of bytes from rotated image, if rotation needs to be performed
      */
+    private fun applyExifDate(path: String, createdAt: Long) {
+        try {
+            val exif = ExifInterface(path)
+            val sdf = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US)
+            // EXIF is stored in local time; you can set timezone if desired:
+            // sdf.timeZone = TimeZone.getTimeZone("UTC")
+            val dateStr = sdf.format(Date(createdAt))
+            exif.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, dateStr)
+            exif.setAttribute(ExifInterface.TAG_DATETIME, dateStr)
+            exif.setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, dateStr)
+            exif.saveAttributes()
+        } catch (e: Exception) {
+            Log.w(TAG, "applyExifDate failed: ${e.message}")
+        }
+    }
+
     private fun getRotatedBytesIfNecessary(source: ByteArray?, path: String): ByteArray? {
         var rotationInDegrees = 0
 
@@ -247,6 +290,7 @@ internal object FileUtils {
      * @param folderName      - folder name for storing video
      * @param toDcim          - whether the file should be saved to DCIM
      * @param fileName        - optional target file name (with or without extension)
+     * @param createdAt       - optional timestamp in millis to set (MediaStore DATE_TAKEN)
      * @return true if video was saved successfully
      */
     fun insertVideo(
@@ -255,22 +299,23 @@ internal object FileUtils {
         folderName: String?,
         toDcim: Boolean,
         fileName: String? = null,
+        createdAt: Long? = null,
         bufferSize: Int = BUFFER_SIZE
     ): Boolean {
         val inputFile = File(inputPath)
+        val inputStream: InputStream?
+        val outputStream: OutputStream?
+
         val inputExtension = MimeTypeMap.getFileExtensionFromUrl(inputFile.toString())
         val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(inputExtension)
 
         // Resolve final display/target name
         var targetName = if (!fileName.isNullOrBlank()) fileName else inputFile.name
-        if (!targetName.contains('.')) {
+        if (!targetName!!.contains('.')) {
             if (!inputExtension.isNullOrEmpty()) {
                 targetName = "$targetName.$inputExtension"
             }
         }
-
-        val inputStream: InputStream?
-        val outputStream: OutputStream?
 
         var directory = Environment.DIRECTORY_MOVIES
         if (toDcim) {
@@ -286,7 +331,10 @@ internal object FileUtils {
         values.put(MediaStore.Video.Media.MIME_TYPE, mimeType)
         values.put(MediaStore.Video.Media.DATE_ADDED, System.currentTimeMillis())
         values.put(MediaStore.Video.Media.DATE_MODIFIED, System.currentTimeMillis())
-        values.put(MediaStore.Video.Media.DATE_TAKEN, System.currentTimeMillis())
+        values.put(
+            MediaStore.Video.Media.DATE_TAKEN,
+            createdAt ?: System.currentTimeMillis()
+        )
 
         if (android.os.Build.VERSION.SDK_INT < 29) {
             try {

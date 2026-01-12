@@ -11,6 +11,7 @@ public class SwiftGallerySaverPlugin: NSObject, FlutterPlugin {
     let path = "path"
     let albumName = "albumName"
     let fileName = "fileName"
+    let creationDateKey = "creationDate" // milliseconds since epoch
     
     public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(name: "gallery_saver", binaryMessenger: registrar.messenger())
@@ -42,29 +43,39 @@ public class SwiftGallerySaverPlugin: NSObject, FlutterPlugin {
         let path = args![self.path] as! String
         let albumName = args![self.albumName] as? String
         let customFileName = args?[self.fileName] as? String
+        var customCreationDate: Date? = nil
+        if let millis = args?[self.creationDateKey] as? NSNumber {
+            customCreationDate = Date(timeIntervalSince1970: millis.doubleValue / 1000.0)
+        }
         
         let status = PHPhotoLibrary.authorizationStatus()
         if status == .notDetermined {
-            PHPhotoLibrary.requestAuthorization({status in
-                if status == .authorized{
-                    self._saveMediaToAlbum(path, mediaType, albumName, customFileName, result)
+            PHPhotoLibrary.requestAuthorization({ status in
+                if status == .authorized {
+                    self._saveMediaToAlbum(path, mediaType, albumName, customFileName, customCreationDate, result)
                 } else {
                     result(false);
                 }
             })
         } else if status == .authorized {
-            self._saveMediaToAlbum(path, mediaType, albumName, customFileName, result)
+            self._saveMediaToAlbum(path, mediaType, albumName, customFileName, customCreationDate, result)
         } else {
             result(false);
         }
     }
     
-    private func _saveMediaToAlbum(_ imagePath: String, _ mediaType: MediaType, _ albumName: String?,
-                                   _ fileName: String?, _ flutterResult: @escaping FlutterResult) {
+    private func _saveMediaToAlbum(
+        _ mediaPath: String,
+        _ mediaType: MediaType,
+        _ albumName: String?,
+        _ fileName: String?,
+        _ creationDate: Date?,
+        _ flutterResult: @escaping FlutterResult
+    ) {
         if (albumName == nil) {
-            self.saveFile(imagePath, mediaType, nil, fileName, flutterResult)
+            self.saveFile(mediaPath, mediaType, nil, fileName, creationDate, flutterResult)
         } else if let album = fetchAssetCollectionForAlbum(albumName!) {
-            self.saveFile(imagePath, mediaType, album, fileName, flutterResult)
+            self.saveFile(mediaPath, mediaType, album, fileName, creationDate, flutterResult)
         } else {
             // create photos album
             createAppPhotosAlbum(albumName: albumName!) { (error) in
@@ -73,7 +84,7 @@ public class SwiftGallerySaverPlugin: NSObject, FlutterPlugin {
                     return
                 }
                 if let album = self.fetchAssetCollectionForAlbum(albumName!) {
-                    self.saveFile(imagePath, mediaType, album, fileName, flutterResult)
+                    self.saveFile(mediaPath, mediaType, album, fileName, creationDate, flutterResult)
                 } else {
                     flutterResult(false)
                 }
@@ -81,29 +92,44 @@ public class SwiftGallerySaverPlugin: NSObject, FlutterPlugin {
         }
     }
     
-    private func saveFile(_ filePath: String, _ mediaType: MediaType, _ album: PHAssetCollection?,
-                          _ fileName: String?, _ flutterResult: @escaping FlutterResult) {
+    private func saveFile(
+        _ filePath: String,
+        _ mediaType: MediaType,
+        _ album: PHAssetCollection?,
+        _ fileName: String?,
+        _ creationDate: Date?,
+        _ flutterResult: @escaping FlutterResult
+    ) {
         let url = URL(fileURLWithPath: filePath)
         PHPhotoLibrary.shared().performChanges({
             var placeholder: PHObjectPlaceholder?
             
             switch mediaType {
             case .image:
-                if let changeRequest = PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url) {
-                    placeholder = changeRequest.placeholderForCreatedAsset
-                }
-            case .video:
-                if let name = fileName, !name.isEmpty {
+                if let date = creationDate {
                     let creationRequest = PHAssetCreationRequest.forAsset()
+                    creationRequest.creationDate = date
                     let options = PHAssetResourceCreationOptions()
-                    options.originalFilename = name
-                    creationRequest.addResource(with: .video, fileURL: url, options: options)
+                    creationRequest.addResource(with: .photo, fileURL: url, options: options)
                     placeholder = creationRequest.placeholderForCreatedAsset
                 } else {
-                    if let changeRequest = PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url) {
+                    if let changeRequest = PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url) {
                         placeholder = changeRequest.placeholderForCreatedAsset
                     }
                 }
+            case .video:
+                let creationRequest = PHAssetCreationRequest.forAsset()
+                if let date = creationDate {
+                    creationRequest.creationDate = date
+                }
+                if let name = fileName, !name.isEmpty {
+                    let options = PHAssetResourceCreationOptions()
+                    options.originalFilename = name
+                    creationRequest.addResource(with: .video, fileURL: url, options: options)
+                } else {
+                    creationRequest.addResource(with: .video, fileURL: url, options: nil)
+                }
+                placeholder = creationRequest.placeholderForCreatedAsset
             }
             
             if let album = album,

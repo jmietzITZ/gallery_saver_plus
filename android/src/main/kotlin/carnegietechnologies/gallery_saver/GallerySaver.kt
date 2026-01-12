@@ -22,6 +22,7 @@ class GallerySaver internal constructor(private val activity: Activity) :
     private var albumName: String = ""
     private var toDcim: Boolean = false
     private var fileName: String = ""
+    private var creationDate: Long? = null // milliseconds
 
     private val job = Job()
     private val uiScope = CoroutineScope(Dispatchers.Main + job)
@@ -42,6 +43,7 @@ class GallerySaver internal constructor(private val activity: Activity) :
         albumName = methodCall.argument<Any>(KEY_ALBUM_NAME)?.toString() ?: ""
         toDcim = methodCall.argument<Any>(KEY_TO_DCIM) as Boolean
         fileName = methodCall.argument<Any>(KEY_FILE_NAME)?.toString() ?: ""
+        creationDate = (methodCall.argument<Any>(KEY_CREATION_DATE) as? Number)?.toLong()
         this.mediaType = mediaType
         this.pendingResult = result
 
@@ -67,9 +69,22 @@ class GallerySaver internal constructor(private val activity: Activity) :
         uiScope.launch {
             val success = async(Dispatchers.IO) {
                 if (mediaType == MediaType.video) {
-                    FileUtils.insertVideo(activity.contentResolver, filePath, albumName, toDcim, fileName)
+                    FileUtils.insertVideo(
+                        activity.contentResolver,
+                        filePath,
+                        albumName,
+                        toDcim,
+                        fileName.ifEmpty { null },
+                        creationDate
+                    )
                 } else {
-                    FileUtils.insertImage(activity.contentResolver, filePath, albumName, toDcim)
+                    FileUtils.insertImage(
+                        activity.contentResolver,
+                        filePath,
+                        albumName,
+                        toDcim,
+                        creationDate
+                    )
                 }
             }
             success.await()
@@ -111,5 +126,6 @@ class GallerySaver internal constructor(private val activity: Activity) :
         private const val KEY_ALBUM_NAME = "albumName"
         private const val KEY_TO_DCIM = "toDcim"
         private const val KEY_FILE_NAME = "fileName"
+        private const val KEY_CREATION_DATE = "creationDate"
     }
 }

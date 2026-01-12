@@ -19,12 +19,14 @@ class GallerySaver {
 
   /// saves video from provided path/URL and optional album name in gallery.
   /// [fileName] allows specifying the final filename of the saved video.
+  /// [creationDate] sets the media timestamp (EXIF-like for Photos on iOS, MediaStore DATE_TAKEN on Android).
   static Future<bool?> saveVideo(
     String path, {
     String? albumName,
     bool toDcim = false,
     Map<String, String>? headers,
     String? fileName,
+    DateTime? creationDate,
   }) async {
     File? tempFile;
     if (path.isEmpty) {
@@ -44,6 +46,7 @@ class GallerySaver {
         'albumName': albumName,
         'toDcim': toDcim,
         'fileName': fileName,
+        'creationDate': creationDate?.millisecondsSinceEpoch,
       },
     );
     if (tempFile != null) {
@@ -52,12 +55,14 @@ class GallerySaver {
     return result;
   }
 
-  /// saves image from provided temp path and optional album name in gallery
+  /// Saves image from provided path/URL and optional album name in gallery.
+  /// [creationDate] sets the media timestamp (EXIF where possible on Android, asset date on iOS).
   static Future<bool?> saveImage(
     String path, {
     String? albumName,
     bool toDcim = false,
     Map<String, String>? headers,
+    DateTime? creationDate,
   }) async {
     File? tempFile;
     if (path.isEmpty) {
@@ -73,7 +78,12 @@ class GallerySaver {
 
     bool? result = await _channel.invokeMethod(
       methodSaveImage,
-      <String, dynamic>{'path': path, 'albumName': albumName, 'toDcim': toDcim},
+      <String, dynamic>{
+        'path': path,
+        'albumName': albumName,
+        'toDcim': toDcim,
+        'creationDate': creationDate?.millisecondsSinceEpoch,
+      },
     );
     if (tempFile != null) {
       tempFile.delete();
